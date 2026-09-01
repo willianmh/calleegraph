@@ -14,34 +14,45 @@ import type {
 // Adaptive density (§4.2)
 // ---------------------------------------------------------------------------
 
-/** What the user asked for. `auto` re-derives itself from the node count. */
-export type DensityMode = 'auto' | 'detailed' | 'compact' | 'grouped';
-/** What is actually drawn. */
-export type Density = 'detailed' | 'compact' | 'grouped';
+/**
+ * What the user (or an embedding prop) asked for. `auto` derives compact vs.
+ * detailed from the live zoom level — never from node count. Grouping ("one
+ * card per repository") is a separate, orthogonal boolean; see
+ * `resolveCompact`, which folds both together the way the reference
+ * prototype does.
+ */
+export type DensityMode = 'auto' | 'detailed' | 'compact';
 
-/** Under this many nodes, every card opens itself and shows job/input detail. */
-export const DETAILED_BELOW = 15;
-/** Over this many nodes, cards collapse into one card per repository. */
-export const GROUPED_ABOVE = 40;
+/** Below this zoom fraction, `auto` density renders compact. */
+export const COMPACT_ZOOM_THRESHOLD = 0.62;
 
 /**
- * Recomputed from the live node count on every render — a repo added or
- * removed, or a re-sync that changes the workflow count, moves the graph
- * between bands without any first-load latching.
+ * Whether cards render compact (filename only) or detailed (name + filename
+ * + wiring). Grouping always forces compact, unless `densityMode` explicitly
+ * pins `'detailed'` — a deliberate escape hatch the fall-through preserves
+ * for free, matching the reference prototype exactly.
  */
-export function resolveDensity(nodeCount: number, mode: DensityMode): Density {
-  if (mode !== 'auto') return mode;
-  if (nodeCount < DETAILED_BELOW) return 'detailed';
-  if (nodeCount > GROUPED_ABOVE) return 'grouped';
-  return 'compact';
+export function resolveCompact(params: {
+  densityMode: DensityMode;
+  grouped: boolean;
+  zoomScale: number;
+}): boolean {
+  const { densityMode, grouped, zoomScale } = params;
+  return (
+    densityMode === 'compact' ||
+    (densityMode === 'auto' && (zoomScale < COMPACT_ZOOM_THRESHOLD || grouped))
+  );
 }
 
-export function densityLabel(density: Density, count: number): string {
+export function densityLabel(params: {
+  grouped: boolean;
+  compact: boolean;
+  count: number;
+}): string {
+  const { grouped, compact, count } = params;
+  if (grouped) return `Grouped — ${count} ${count === 1 ? 'repository' : 'repositories'}`;
   const noun = count === 1 ? 'node' : 'nodes';
-  if (density === 'grouped')
-    return `Grouped — ${count} ${count === 1 ? 'repository' : 'repositories'}`;
-  if (density === 'compact') return `Compact — ${count} ${noun}`;
-  return `Detailed — ${count} ${noun}`;
+  return compact ? `Compact — ${count} ${noun}` : `Detailed — ${count} ${noun}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +119,14 @@ export const UPSTREAM_MARKER = 'url(#cg-arrow-upstream)';
 export const DIM_OPACITY = 0.16;
 /** Nodes keep a touch more presence than edges so the layout stays readable. */
 export const NODE_DIM_OPACITY = 0.3;
+
+/** Upstream-of-hover dash — shared by the legend swatch and the live edge renderer. */
+export const UPSTREAM_HOVER_DASH = '5 3';
+/** A conditional (`if:`) call's own treatment — dashed at rest, not only on hover. */
+export const CONDITIONAL_STROKE = 'var(--color-neutral-500)';
+export const CONDITIONAL_DASH = '1.5 3.5';
+/** Width of the detail panel's grid column — shared with the edge-centering math. */
+export const DETAIL_PANEL_WIDTH = 372;
 
 /** Rank used to pick a repository group's worst edge status. */
 const STATUS_RANK: Record<EdgeStatus, number> = {
@@ -339,7 +358,22 @@ export function wiringFor(node: WorkflowNode, index: GraphIndex): CallWiring[] {
 // ---------------------------------------------------------------------------
 
 export type KindFilter = 'all' | NodeKind;
-export type StatusFilter = 'all' | EdgeStatus;
+export type StatusFilter = 'all' | 'healthy' | 'error';
+
+/**
+ * `unresolved` is deliberately not a fault (see the comment above
+ * `EDGE_VISUALS`) — a data-completeness gap must never read as an error — so
+ * it counts as Healthy here. `warning` already sits on the magenta/fault ramp,
+ * so it counts as an Error for filtering, alongside `error` itself.
+ */
+const HEALTHY_EDGE_STATUSES: ReadonlySet<EdgeStatus> = new Set(['ok', 'unresolved']);
+const ERROR_EDGE_STATUSES: ReadonlySet<EdgeStatus> = new Set(['error', 'warning']);
+
+export function statusPassesFilter(status: EdgeStatus | undefined, filter: StatusFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'healthy') return status === undefined || HEALTHY_EDGE_STATUSES.has(status);
+  return status !== undefined && ERROR_EDGE_STATUSES.has(status);
+}
 
 export interface GraphFilters {
   /** Repository full names that are switched on. `null` means "all". */
@@ -384,11 +418,14 @@ export function filterGraph(
   index: GraphIndex,
   filters: GraphFilters,
 ): FilteredGraph {
+  // Search narrows visual emphasis (see `interaction.ts`'s `nodeEmphasis`/
+  // `edgeEmphasis`, fed by `matchedNodeIds` in `GraphScreen.tsx`) — it never
+  // removes a node or edge from the canvas, so `filters.query` plays no part
+  // in this predicate.
   const nodes = graph.nodes.filter((node) => {
     if (filters.repositories && !filters.repositories.has(node.repository_full_name)) return false;
     if (filters.kind !== 'all' && node.kind !== filters.kind) return false;
-    if (filters.status !== 'all' && index.nodeStatus.get(node.id) !== filters.status) return false;
-    return nodeMatchesQuery(node, filters.query);
+    return statusPassesFilter(index.nodeStatus.get(node.id), filters.status);
   });
 
   const keptIds = new Set(nodes.map((node) => node.id));
@@ -396,7 +433,7 @@ export function filterGraph(
 
   const edges = graph.edges.filter((edge) => {
     if (!keptIds.has(edge.source_node_id)) return false;
-    if (filters.status !== 'all' && edge.status !== filters.status) return false;
+    if (!statusPassesFilter(edge.status, filters.status)) return false;
     if (edge.target_node_id) return keptIds.has(edge.target_node_id);
     const id = unresolvedNodeId(edge.target_ref);
     const parsed = index.unresolvedTargets.get(id);

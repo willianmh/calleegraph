@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 
-import type { Neighbourhood } from './model';
+import { DIM_OPACITY, NODE_DIM_OPACITY, type Neighbourhood } from './model';
 
 /**
  * Hover / selection state lives in context rather than in each node's `data`,
@@ -20,10 +20,17 @@ export interface GraphInteraction {
   matchedNodeIds: ReadonlySet<string> | null;
   /** Endpoints of the selected edge, so both cards stay lit. */
   selectedEndpoints: ReadonlySet<string>;
+  /** How far a dimmed edge fades — the `dimOpacity` config prop. */
+  dimOpacity: number;
+  /** How far a dimmed node fades — always `dimOpacity + 0.14` (§4.2). */
+  nodeDimOpacity: number;
   setHoveredNode: (id: string | null) => void;
   setHoveredEdge: (id: string | null) => void;
-  selectEdge: (id: string | null) => void;
+  /** Always a real id — closing the panel goes through the panel's own `onClose`. */
+  selectEdge: (id: string) => void;
   toggleExpanded: (id: string) => void;
+  /** Collapse "Group by repo" back to individual nodes, globally. */
+  ungroup: () => void;
 }
 
 const noop = () => undefined;
@@ -35,10 +42,13 @@ export const defaultInteraction: GraphInteraction = {
   hoveredEdgeId: null,
   matchedNodeIds: null,
   selectedEndpoints: new Set<string>(),
+  dimOpacity: DIM_OPACITY,
+  nodeDimOpacity: NODE_DIM_OPACITY,
   setHoveredNode: noop,
   setHoveredEdge: noop,
   selectEdge: noop,
   toggleExpanded: noop,
+  ungroup: noop,
 };
 
 export const GraphInteractionContext = createContext<GraphInteraction>(defaultInteraction);

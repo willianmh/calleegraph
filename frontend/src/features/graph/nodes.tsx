@@ -6,7 +6,6 @@ import type { CgNode, GroupNodeData, UnresolvedNodeData, WorkflowNodeData } from
 import { EXPANDED_MAX_HEIGHT } from './flow';
 import { nodeEmphasis, useGraphInteraction, type Emphasis } from './interaction';
 import type { CallWiring } from './model';
-import { NODE_DIM_OPACITY } from './model';
 
 /**
  * Card chrome, straight from the focus file: paper fill on the newsprint
@@ -16,7 +15,12 @@ import { NODE_DIM_OPACITY } from './model';
  * The border is the only rule this design permits — a card is a discrete
  * item, which is exactly what Broadsheet reserves boxes for.
  */
-function cardChrome(emphasis: Emphasis, status: EdgeStatus | undefined, expanded: boolean) {
+function cardChrome(
+  emphasis: Emphasis,
+  status: EdgeStatus | undefined,
+  expanded: boolean,
+  nodeDimOpacity: number,
+) {
   let borderColor = 'var(--color-neutral-300)';
   let background = 'var(--color-paper)';
 
@@ -36,7 +40,7 @@ function cardChrome(emphasis: Emphasis, status: EdgeStatus | undefined, expanded
     background,
     borderColor,
     boxShadow: expanded ? 'var(--shadow-md)' : 'var(--shadow-sm)',
-    opacity: emphasis === 'dim' ? NODE_DIM_OPACITY : 1,
+    opacity: emphasis === 'dim' ? nodeDimOpacity : 1,
   };
 }
 
@@ -49,22 +53,38 @@ function Ports() {
   );
 }
 
+/**
+ * `pointer-events-auto` is load-bearing, not decorative: React Flow sets
+ * `pointer-events: none` inline on `.react-flow__node` whenever a node has
+ * no built-in interactivity (`nodesDraggable`/`nodesConnectable`/
+ * `elementsSelectable` are all `false` on this canvas, by design — panning
+ * should work over a node, not just empty space), and that `none` inherits
+ * straight down to this card unless it's explicitly overridden here. Without
+ * it, every onClick/onMouseEnter below is correctly wired and never fires.
+ */
 const CARD_CLASS =
-  'h-full w-full overflow-hidden rounded-md border transition-[opacity,background-color,border-color,box-shadow] duration-200';
+  'pointer-events-auto h-full w-full overflow-hidden rounded-md border transition-[opacity,background-color,border-color,box-shadow] duration-200';
 
 // ---------------------------------------------------------------------------
 
 export function WorkflowCard({ id, data }: NodeProps<CgNode>) {
   const interaction = useGraphInteraction();
-  const { node, wiring, status, expanded, density, calleeCount, callerCount } =
-    data as WorkflowNodeData;
+  const {
+    node,
+    wiring,
+    status,
+    expanded,
+    compact: dataCompact,
+    calleeCount,
+    callerCount,
+  } = data as WorkflowNodeData;
   const emphasis = nodeEmphasis(interaction, id);
-  const compact = density === 'compact' && !expanded;
+  const compact = dataCompact && !expanded;
 
   return (
     <div
       className={CARD_CLASS}
-      style={cardChrome(emphasis, status, expanded)}
+      style={cardChrome(emphasis, status, expanded, interaction.nodeDimOpacity)}
       onMouseEnter={() => {
         interaction.setHoveredNode(id);
       }}
@@ -237,7 +257,7 @@ export function UnresolvedCard({ id, data }: NodeProps<CgNode>) {
         background: 'var(--color-neutral-100)',
         borderColor: emphasis === 'focus' ? 'var(--color-accent-700)' : 'var(--color-neutral-500)',
         boxShadow: 'none',
-        opacity: emphasis === 'dim' ? NODE_DIM_OPACITY : 1,
+        opacity: emphasis === 'dim' ? interaction.nodeDimOpacity : 1,
       }}
       onMouseEnter={() => {
         interaction.setHoveredNode(id);
@@ -273,7 +293,12 @@ export function UnresolvedCard({ id, data }: NodeProps<CgNode>) {
 
 // ---------------------------------------------------------------------------
 
-/** One card per repository — the large-graph density band. */
+/**
+ * One card per repository — the large-graph density band. Clicking any group
+ * card ungroups the whole canvas back to individual nodes (a global toggle,
+ * not a per-repo drill-down — matching both the spec and the reference
+ * prototype exactly).
+ */
 export function GroupCard({ id, data }: NodeProps<CgNode>) {
   const interaction = useGraphInteraction();
   const { repositoryFullName, repository, workflowCount, internalCallCount, status } =
@@ -283,14 +308,26 @@ export function GroupCard({ id, data }: NodeProps<CgNode>) {
   return (
     <div
       className={CARD_CLASS}
-      style={cardChrome(emphasis, status, false)}
+      style={cardChrome(emphasis, status, false, interaction.nodeDimOpacity)}
       onMouseEnter={() => {
         interaction.setHoveredNode(id);
       }}
       onMouseLeave={() => {
         interaction.setHoveredNode(null);
       }}
-      aria-label={`${repositoryFullName} — ${workflowCount} workflows`}
+      onClick={(event) => {
+        event.stopPropagation();
+        interaction.ungroup();
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`${repositoryFullName} — ${workflowCount} workflows. Ungroup to view individual workflows.`}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          interaction.ungroup();
+        }
+      }}
     >
       <Ports />
       <div className="flex h-full flex-col justify-center px-[14px] py-[14px]">

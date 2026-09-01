@@ -4,8 +4,8 @@ import type { Edge, Repository, WorkflowNode } from '@/api/types';
 import { RepoStatusDot } from '@/components/StatusDot';
 import { SectionLabel, Segmented } from '@/components/ui';
 import { Legend } from './Legend';
-import type { DensityMode, GraphFilters, KindFilter, StatusFilter } from './model';
-import { issueCodeLabel } from './model';
+import type { GraphFilters, KindFilter, StatusFilter } from './model';
+import { issueCodeLabel, nodeMatchesQuery } from './model';
 
 const KIND_OPTIONS = [
   { value: 'all' as const, label: 'All' },
@@ -15,16 +15,8 @@ const KIND_OPTIONS = [
 
 const STATUS_OPTIONS = [
   { value: 'all' as const, label: 'All' },
+  { value: 'healthy' as const, label: 'Healthy' },
   { value: 'error' as const, label: 'Errors' },
-  { value: 'warning' as const, label: 'Warnings' },
-  { value: 'unresolved' as const, label: 'Unresolved' },
-];
-
-const DENSITY_OPTIONS = [
-  { value: 'auto' as const, label: 'Auto' },
-  { value: 'detailed' as const, label: 'Detailed' },
-  { value: 'compact' as const, label: 'Compact' },
-  { value: 'grouped' as const, label: 'Grouped' },
 ];
 
 export interface GraphSidebarProps {
@@ -35,8 +27,8 @@ export interface GraphSidebarProps {
   nodesById: ReadonlyMap<string, WorkflowNode>;
   filters: GraphFilters;
   onFiltersChange: (next: GraphFilters) => void;
-  densityMode: DensityMode;
-  onDensityModeChange: (mode: DensityMode) => void;
+  /** Lighter-weight than `onFiltersChange`: search only dims, it never filters. */
+  onQueryChange: (query: string) => void;
   selectedEdgeId: string | null;
   onSelectEdge: (id: string) => void;
   onJumpToNode: (id: string) => void;
@@ -50,8 +42,7 @@ export function GraphSidebar({
   nodesById,
   filters,
   onFiltersChange,
-  densityMode,
-  onDensityModeChange,
+  onQueryChange,
   selectedEdgeId,
   onSelectEdge,
   onJumpToNode,
@@ -59,14 +50,7 @@ export function GraphSidebar({
 }: GraphSidebarProps) {
   const query = filters.query.trim().toLowerCase();
   const matches = query
-    ? nodes
-        .filter(
-          (node) =>
-            node.name.toLowerCase().includes(query) ||
-            node.path.toLowerCase().includes(query) ||
-            node.repository_full_name.toLowerCase().includes(query),
-        )
-        .slice(0, 8)
+    ? nodes.filter((node) => nodeMatchesQuery(node, filters.query)).slice(0, 6)
     : [];
 
   const activeRepos = filters.repositories;
@@ -90,7 +74,7 @@ export function GraphSidebar({
           placeholder="Search workflows…"
           value={filters.query}
           onChange={(event) => {
-            onFiltersChange({ ...filters, query: event.target.value });
+            onQueryChange(event.target.value);
           }}
         />
         {query.length > 0 && (
@@ -186,15 +170,6 @@ export function GraphSidebar({
             onChange={(status: StatusFilter) => {
               onFiltersChange({ ...filters, status });
             }}
-          />
-        </div>
-        <div className="mt-[16px]">
-          <SectionLabel>Density</SectionLabel>
-          <Segmented
-            label="Graph density"
-            options={DENSITY_OPTIONS}
-            value={densityMode}
-            onChange={onDensityModeChange}
           />
         </div>
       </div>

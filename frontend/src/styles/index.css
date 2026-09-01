@@ -362,6 +362,21 @@
 }
 .react-flow__node {
   cursor: pointer;
+  /* Expand/collapse must animate the displaced neighbours (~340ms, ease-out)
+     so spatial orientation survives a relayout (§4.2/§3.2). This rule is
+     deliberately unlayered, matching the chrome block around it — a
+     reduced-motion override placed inside `@layer utilities` would never
+     win against an unlayered base rule, whatever the cascade order, since
+     unlayered styles always outrank layered ones. */
+  transition:
+    transform 340ms ease-out,
+    width 340ms ease-out,
+    height 340ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node {
+    transition: none;
+  }
 }
 .react-flow__edge-path {
   transition:

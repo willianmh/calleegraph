@@ -1,6 +1,13 @@
 import { SectionLabel } from '@/components/ui';
 import type { EdgeStatus } from '@/api/types';
-import { DOWNSTREAM_STROKE, EDGE_VISUALS, UPSTREAM_STROKE } from './model';
+import {
+  CONDITIONAL_DASH,
+  CONDITIONAL_STROKE,
+  DOWNSTREAM_STROKE,
+  EDGE_VISUALS,
+  UPSTREAM_HOVER_DASH,
+  UPSTREAM_STROKE,
+} from './model';
 
 interface Row {
   stroke: string;
@@ -30,12 +37,21 @@ const HOVER_ROWS: Row[] = [
   },
   {
     stroke: UPSTREAM_STROKE,
-    dash: '5 3',
+    dash: UPSTREAM_HOVER_DASH,
     width: 2.4,
     label: 'Upstream',
     note: 'what calls it',
   },
 ];
+
+/** Always-on, not just under hover — a job's `if:` gate has its own treatment. */
+const CONDITIONAL_ROW: Row = {
+  stroke: CONDITIONAL_STROKE,
+  dash: CONDITIONAL_DASH,
+  width: 1.3,
+  label: 'Conditional (if:)',
+  note: 'gated by a job-level if: expression',
+};
 
 function LegendLine({ row }: { row: Row }) {
   return (
@@ -87,6 +103,7 @@ export function Legend() {
         {HOVER_ROWS.map((row) => (
           <LegendLine key={row.label} row={row} />
         ))}
+        <LegendLine row={CONDITIONAL_ROW} />
         <div className="text-[10.5px] leading-[1.35] text-neutral-600">
           A conditional call shows its <span className="cg-mono">if:</span> expression on the line
           while it is highlighted.

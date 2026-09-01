@@ -1,0 +1,9 @@
+name: Reusable With No Inputs
+on:
+  workflow_call:
+  workflow_dispatch:
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"

@@ -33,3 +33,7 @@ yarn-error.log*
 .idea/
 .vscode/
 *.swp
+
+
+*_prompt.md
+docs/_local

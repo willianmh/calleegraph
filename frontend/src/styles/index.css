@@ -1,0 +1,371 @@
+/*
+ * Calleegraph — style entry point.
+ *
+ * The visual system is **Broadsheet** (see
+ * `canvas-requirements-clarification/project/_ds/broadsheet-.../readme.md`):
+ * newsprint set for the web. Near-black Source Serif 4 on a paper ground,
+ * process cyan for interactive elements and process magenta as the rarer
+ * second spot colour. Structure comes from whitespace, never from rules,
+ * borders or boxes.
+ *
+ * Every token below is copied verbatim from the design system's `styles.css`.
+ * They are declared inside Tailwind's `@theme` so that (a) `var(--color-*)`
+ * etc. resolve exactly as they do in the design prototype and (b) Tailwind
+ * generates its utilities *from the design tokens* rather than from its own
+ * default palette. Nothing in this app may hard-code a value a token carries.
+ */
+
+@import 'tailwindcss';
+
+/* Self-hosted Source Serif 4 (the design system pulls the same family from
+   Google Fonts; the container must not depend on a third-party CDN). */
+@import '@fontsource-variable/source-serif-4/index.css';
+@import '@fontsource-variable/source-serif-4/wght-italic.css';
+
+@import '@xyflow/react/dist/base.css';
+
+@theme {
+  /* Drop Tailwind's default palette entirely: the only colours in this app are
+     Broadsheet's. This is what stops a stray `text-red-500` from creeping in —
+     §6 reserves status colour strictly for the four edge states. */
+  --color-*: initial;
+  --font-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --color-bg: #f3f2f2;
+  --color-surface: #eae9e9;
+  --color-text: #201e1d;
+  --color-accent: #0088b0;
+  --color-accent-2: #d6006c;
+  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
+
+  /* Tonal ramps — generated in OKLCH on one shared lightness scale, so the
+     same step of any role matches the others in visual value. */
+  --color-neutral-100: #f8f4f4;
+  --color-neutral-200: #eae7e7;
+  --color-neutral-300: #d7d3d3;
+  --color-neutral-400: #bab6b6;
+  --color-neutral-500: #9b9797;
+  --color-neutral-600: #7d7979;
+  --color-neutral-700: #605d5d;
+  --color-neutral-800: #444141;
+  --color-neutral-900: #2d2b2b;
+
+  --color-accent-100: #e9f8ff;
+  --color-accent-200: #cbeeff;
+  --color-accent-300: #99e0ff;
+  --color-accent-400: #62c5ee;
+  --color-accent-500: #38a6cf;
+  --color-accent-600: #1186ac;
+  --color-accent-700: #006786;
+  --color-accent-800: #004961;
+  --color-accent-900: #0a303e;
+
+  --color-accent-2-100: #fff1f4;
+  --color-accent-2-200: #ffdee6;
+  --color-accent-2-300: #ffc0d0;
+  --color-accent-2-400: #ff90b1;
+  --color-accent-2-500: #ff458e;
+  --color-accent-2-600: #d82071;
+  --color-accent-2-700: #aa0b56;
+  --color-accent-2-800: #790e3d;
+  --color-accent-2-900: #4b1528;
+
+  /* A print-treatment ink, never interface chrome (design system readme). It
+     is declared for completeness; nothing in this UI paints with it. */
+  --color-process-yellow: #edbb00;
+
+  /* Not a Broadsheet token: the focus file paints node cards on `#ffffff`
+     over the `--color-neutral-100` canvas — the white of the sheet, one step
+     brighter than the page ground. Named here so it is still never a literal
+     at a call site. */
+  --color-paper: #ffffff;
+
+  --font-heading: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  --font-body: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  /* The one place §6 licenses a non-serif: workflow names, paths and
+     expression values, scoped exactly as the focus file's `.cg-mono` is. */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Density 1.25×. `--spacing: 5px` reproduces the design system's
+     --space-1…8 scale exactly on Tailwind's numeric spacing utilities
+     (p-1 = 5px, p-2 = 10px, p-3 = 15px, p-4 = 20px, p-6 = 30px, p-8 = 40px).
+     Do not tighten it. */
+  --spacing: 5px;
+
+  --radius-sm: 1px;
+  --radius-md: 2px;
+  --radius-lg: 4px;
+
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2d2b2b 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2d2b2b 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2d2b2b 22%, transparent);
+}
+
+@theme {
+  /* The design system's --space-* aliases, kept so a `var(--space-3)` lifted
+     straight out of the prototype still resolves. */
+  --space-1: 5px;
+  --space-2: 10px;
+  --space-3: 15px;
+  --space-4: 20px;
+  --space-6: 30px;
+  --space-8: 40px;
+
+  --font-heading-weight: 600;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.55;
+    font-weight: 400;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-heading);
+    font-weight: var(--font-heading-weight);
+    line-height: 1.12;
+    letter-spacing: -0.015em;
+    margin: 0 0 var(--space-2);
+  }
+
+  /* Themed interaction states, never browser defaults (design system readme). */
+  :focus {
+    outline: none;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  }
+
+  button {
+    font-family: inherit;
+    color: inherit;
+  }
+}
+
+@layer components {
+  /* Ported from the design system's component layer. Only the classes this
+     app actually uses are carried over; everything else is Tailwind. */
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    text-decoration: none;
+    font-family: var(--font-heading);
+    font-weight: var(--font-heading-weight);
+    font-size: 14px;
+    line-height: 1.2;
+    color: var(--color-text);
+    background: transparent;
+    border: 1px solid transparent;
+    padding: var(--space-2) calc(var(--space-3) * 1.2);
+    border-radius: var(--radius-md);
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .btn-primary {
+    background: var(--color-accent);
+    color: var(--color-bg);
+  }
+  .btn-primary:not(:disabled):hover {
+    background: var(--color-accent-600);
+  }
+  .btn-primary:not(:disabled):active {
+    background: var(--color-accent-700);
+  }
+  .btn-secondary {
+    border-color: var(--color-divider);
+  }
+  .btn-secondary:not(:disabled):hover {
+    background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  }
+  .btn-secondary:not(:disabled):active {
+    background: color-mix(in srgb, var(--color-text) 14%, transparent);
+  }
+  .btn-ghost {
+    color: var(--color-accent);
+    padding-inline: var(--space-1);
+  }
+  .btn-ghost:not(:disabled):hover {
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  }
+  .btn-ghost:not(:disabled):active {
+    background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+
+  .input {
+    width: 100%;
+    min-height: 36px;
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--color-text);
+    caret-color: var(--color-accent);
+    background: var(--color-surface);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md);
+  }
+  .input::placeholder {
+    color: color-mix(in srgb, var(--color-text) 65%, transparent);
+    opacity: 1;
+  }
+  .input:hover {
+    border-color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  }
+  .input:focus-visible {
+    border-color: var(--color-accent);
+    outline-offset: 0;
+  }
+
+  .seg {
+    display: inline-flex;
+    overflow: hidden;
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md);
+  }
+  .seg-opt {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    background: transparent;
+  }
+  .seg-opt + .seg-opt {
+    border-left: 1px solid var(--color-divider);
+  }
+  .seg-opt[aria-pressed='true'] {
+    background: var(--color-accent-700);
+    color: var(--color-bg);
+  }
+  .seg-opt[aria-pressed='false']:hover {
+    background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    padding: 3px 10px;
+    border-radius: calc(var(--radius-md) * 0.75);
+  }
+  .tag-accent {
+    background: var(--color-accent-100);
+    color: var(--color-accent-800);
+  }
+  .tag-accent-2 {
+    background: var(--color-accent-2-100);
+    color: var(--color-accent-2-800);
+  }
+  .tag-neutral {
+    background: var(--color-neutral-100);
+    color: var(--color-neutral-800);
+  }
+  .tag-outline {
+    border: 1px solid var(--color-accent);
+    color: var(--color-accent);
+  }
+
+  /* Scoped monospace — workflow names, paths and expression values only
+     (§6), exactly the scope the focus file gives its `.cg-mono`. */
+  .cg-mono {
+    font-family: var(--font-mono);
+    font-variant-ligatures: none;
+  }
+
+  .cg-hit:hover {
+    background: var(--color-accent-100);
+  }
+}
+
+@layer utilities {
+  @keyframes cg-pulse {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+  .cg-pulse {
+    animation: cg-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes cg-dash {
+    to {
+      stroke-dashoffset: -24;
+    }
+  }
+  .cg-flow {
+    animation: cg-dash 900ms linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cg-pulse,
+    .cg-flow {
+      animation: none;
+    }
+  }
+}
+
+/* React Flow's own chrome, retinted to Broadsheet. The library ships a blue
+   selection/handle palette that would otherwise sit outside the system. */
+.react-flow {
+  --xy-background-color: var(--color-neutral-100);
+  --xy-edge-stroke-default: var(--color-neutral-400);
+  --xy-node-border-default: none;
+  --xy-node-background-color-default: transparent;
+  --xy-node-boxshadow-hover-default: none;
+  --xy-node-boxshadow-selected-default: none;
+  --xy-attribution-background-color: transparent;
+}
+.react-flow__attribution {
+  font-size: 9px;
+  color: var(--color-neutral-500);
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.react-flow__node {
+  cursor: pointer;
+}
+.react-flow__edge-path {
+  transition:
+    opacity 180ms ease,
+    stroke-width 160ms ease,
+    stroke 160ms ease;
+}

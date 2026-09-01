@@ -181,7 +181,9 @@ This is a known v1 scope boundary, not a bug: multi-ref fetching per repo is fut
 
 ## 9. Validation rules (produce `EdgeIssue[]` per edge)
 
-Only evaluated when `target_node_id` is resolved (an `unresolved` edge doesn't get these — it gets `status="unresolved"` and no issues, since there's nothing to validate against yet):
+Only evaluated when `target_node_id` is resolved (an `unresolved` edge doesn't get these — there's nothing to validate against yet):
+
+> **Orchestrator correction (2026-08-31):** "no issues" above means *don't run the four input-validation rules below against a callee you never parsed*. It does **not** mean an unresolved edge ships an empty `issues` array. An unresolved edge **does** carry exactly one `EdgeIssue` with `code: "unresolved_target"`, `severity: "warning"`, `input_name: null`, explaining what to do about it — because orchestrator §5 defines that code, and frontend §4.2 both requires the tooltip to help the user add the missing repo *and* forbids the frontend from authoring that copy itself. Its `message`/`suggestion` must name the real reference, and must distinguish "this repo isn't tracked — add it" from "this repo is tracked but the `@ref` doesn't match what's synced" (the §8 v1 limitation), since those are different user actions. **`edge.status` stays `"unresolved"` regardless** — this issue must never roll it up to `"warning"`.
 
 - **`unknown_input`**: a key in `with_mapping` that isn't in the callee's `declared_inputs`. Suggestion: if a declared input name is a close string match (e.g. Levenshtein distance ≤ 2), suggest it by name ("Did you mean `environment`?"); otherwise suggest removing the key.
 - **`missing_required_input`**: a `declared_inputs` entry with `required=true` and no `default` that isn't present in `with_mapping`. Suggestion names the exact missing input.

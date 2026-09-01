@@ -1,0 +1,13 @@
+name: Broken Release
+on:
+  push:
+
+jobs:
+  call-deploy:
+    uses: acme/platform/.github/workflows/reusable-deploy.yml@main
+    with:
+      enviroment: production
+      dry_run: maybe
+      tier: enterprise
+    secrets:
+      DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}

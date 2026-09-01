@@ -1,0 +1,21 @@
+name: Cross Repo Caller
+on:
+  push:
+
+jobs:
+  deploy:
+    if: needs.nonexistent.outputs.ok == 'true'
+    uses: acme/platform/.github/workflows/reusable-deploy.yml@main
+    with:
+      environment: staging
+    secrets: inherit
+
+  pinned-to-a-tag:
+    uses: acme/platform/.github/workflows/reusable-deploy.yml@v1.2.3
+    with:
+      environment: staging
+
+  plain-action-job:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4

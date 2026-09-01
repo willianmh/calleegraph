@@ -74,3 +74,137 @@ delete a past entry (see `02_backend_prompt.md` §13).
   /api/repositories`, `app/github/client.py` needs `get_repo`, tree listing,
   and blob fetch added), which is the first consumer of the stored PAT beyond
   validation.
+
+## [2026-08-31 20:55] Repositories, discovery/parsing, graph assembly, SSE
+
+Resumed from the previous entry's `Next`: "repository registration + workflow
+discovery (§6, `POST/GET/DELETE /api/repositories`, `app/github/client.py`
+needs `get_repo`, tree listing, and blob fetch added)", and carried on through
+the rest of the backend. Contract shapes come from `03_orchestrator_prompt.md`
+§5 (authoritative), not from §5 of the backend prompt.
+
+- Did:
+  - `app/models.py` — `repository`, `workflow_node`, `job`, `job_call` tables
+    (§4) with Postgres native enums (`repo_status`, `node_kind`,
+    `secrets_mode`), `JSONB` for the list/map columns, and `ON DELETE CASCADE`
+    from repository → workflow_node → job → job_call. No issues table:
+    `EdgeIssue[]` is recomputed at assembly time, as §4 requires.
+  - `alembic/versions/0002_create_graph_tables.py` — migration for the above.
+    Verified `upgrade`/`downgrade`/`upgrade` round-trips and that
+    `alembic check` reports no drift against the models.
+  - `app/services.py` — the cleanup the last entry called for: `get_settings_row`
+    moved out of `app/routers/settings.py`, joined by `stored_pat()` and
+    `make_github_client()`, now that repo sync is a second consumer. The
+    settings router imports it instead of owning it; no router imports another
+    router.
+  - `app/github/client.py` — extended (not rewritten) with `get_repo`,
+    `get_branch_head_sha`, `get_tree` (recursive), `get_blob_text`
+    (base64-decoding). Also made `token` optional so public repos work
+    unauthenticated at a lower rate limit; the existing retry/backoff and PAT
+    validation paths are untouched.
+  - `app/github/parse.py` — defensive YAML parsing (§7): `on:` as string /
+    list / map, `workflow_call: null` still meaning reusable, `needs:` as
+    string or list, `choice` options, `secrets: inherit|explicit|none`,
+    `uses:` classified as workflow-call vs. plain action, `with:` values kept
+    raw. Handles PyYAML resolving a bare `on:` to the boolean `True`
+    (YAML 1.1) as well as a quoted `"on"`. Malformed files raise
+    `WorkflowParseError` for the sync loop to skip per file.
+  - `app/graph/resolve.py` — §8 resolution, with the v1 one-ref-per-repo
+    limitation spelled out in the module docstring and enforced by
+    `ref_is_current` (omitted ref / default branch / synced SHA resolve; tags,
+    other branches, other SHAs do not).
+  - `app/graph/validate.py` — §9 rules: `unknown_input` (with Levenshtein ≤ 2
+    "Did you mean `x`?" naming the real declared input), `missing_required_input`,
+    `type_mismatch` (boolean/number/choice, skipped for `${{ }}` values),
+    `unresolvable_condition` (warning). `edge_status()` keeps `unresolved`
+    independent of issues.
+  - `app/graph/assemble.py` + `app/graph/service.py` — §11 assembly, resolving
+    and validating on every build so cross-repo edges stay correct as repos
+    come and go, plus the cached/publish wrappers.
+  - `app/cache.py` — both caches from §2: parsed-file cache keyed by
+    `(full_name, commit_sha, path)` and the assembled-graph cache keyed by a
+    hash of tracked repos' SHAs. Every Redis call degrades to a miss on
+    outage. `invalidate_graph_cache()` is called explicitly on every repo
+    state change, with the TTL as a safety net only.
+  - `app/events.py` + `app/routers/events.py` — in-process SSE broker and
+    `GET /api/events/stream`; one connection serves both event types, plus
+    `: keepalive` comments. Publishing is non-blocking and drops on a full
+    subscriber queue rather than stalling a sync.
+  - `app/sync.py` — §10 background task: `FETCH_CONCURRENCY` semaphore, status
+    transitions each emitting `repository_updated`, one recursive tree call
+    per repo, bounded parallel blob fetches, per-file parse tolerance, and
+    row replacement in a single transaction. Every error path leaves the last
+    successful sync's rows untouched.
+  - `app/routers/repositories.py`, `app/routers/graph.py`, `app/main.py` —
+    `GET/POST /api/repositories`, `DELETE /api/repositories/{id}`,
+    `POST /api/repositories/{id}/refresh`, `GET /api/graph`, all wired in.
+  - `app/schemas.py` — every contract type from orchestrator §5 verbatim.
+    `JobCall.with_mapping` is aliased to `with` on the wire (confirmed in the
+    generated OpenAPI schema).
+  - Tests (102 passing): `tests/test_parse.py`, `test_resolve.py`,
+    `test_validate.py`, `test_sync_flow.py`, `test_api.py`, plus
+    `tests/fixtures/*.yml` including three malformed/degenerate files.
+  - `tests/repos.py` + `tests/test_contract_scenario.py` — **the synthetic
+    stand-in for the three §2.2 contract-verification repos**, added at the
+    orchestrator's request since no live test PAT is available. A synthetic
+    four-repo GitHub (`acme/website` top-level-only, `acme/platform` hosting
+    the reusable callee, `acme/services` cross-repo caller + a malformed file,
+    `acme/broken` with a broken input mapping) served over
+    `httpx.MockTransport`. One readable scenario test walks the whole
+    orchestrator §11.2 demo: unresolved-before / resolved-after registering
+    the target repo, the error edge whose suggestion names `environment` by
+    name, deletion flipping edges back to `unresolved` (never `error`), the
+    malformed file not stopping anything, and stable `node.id`/`edge.id`
+    across a re-sync. A second test asserts the PAT appears in no response.
+  - `backend/README.md` — endpoint table, the v1 resolution limitation, and a
+    pointer to the scenario test as the executable contract.
+- Verified locally (real output in the handoff): `uv sync`, `uv run ruff check .`
+  (clean), `uv run mypy app` (clean, 24 files), `uv run pytest` (102 passed),
+  `alembic upgrade/downgrade/upgrade` and `alembic check` against local
+  Postgres 16 + Redis 7, and a live boot smoke test — `GET /api/health` both
+  `connected`, `/api/repositories`, `/api/graph` and `/api/events/stream` all
+  responding. No network calls in the test suite.
+- Deviated:
+  - `POST /api/repositories/{id}/refresh` does the remote-HEAD comparison
+    *inside* the background task rather than in the request handler, so it
+    returns `pending` immediately instead of blocking on a GitHub round-trip.
+    The behaviour §5 describes is preserved — an unmoved HEAD goes straight
+    back to `done` without re-parsing (test:
+    `test_unchanged_head_short_circuits_without_reparsing`).
+  - `edge.id` is `f"{source_job_id}->{target_ref}"`, deliberately *not*
+    including the resolved target. §5 only requires stability across re-syncs
+    of the same SHA; keying on the raw ref additionally keeps the id stable
+    when an edge flips unresolved↔resolved because another repo was added or
+    removed, so the frontend can animate that instead of swapping edges. Say
+    the word if you'd rather it were target-derived.
+  - `job_call.target_node_id` is persisted (per §4) but treated as a cache:
+    §11 recomputes resolution at assembly time, which is what makes the
+    cross-repo add/remove behaviour work. Its FK is `ON DELETE SET NULL`.
+  - `unresolvable_condition` skips the `inputs.x` check on a reusable workflow
+    that is *also* `workflow_dispatch`-triggered, since those inputs come from
+    a source the model doesn't hold — a false-positive guard, not a rule change.
+- Blocked:
+  - **`IssueCode: "unresolved_target"` is currently never emitted.** §5 defines
+    it in the `IssueCode` union, but backend prompt §9 says an unresolved edge
+    "gets `status="unresolved"` and no issues". I followed §9 literally, so
+    unresolved edges ship `issues: []` and that code is unused. If the frontend
+    would rather render an explanatory issue ("register `acme/platform` to
+    resolve this call"), say so and I'll emit one — it's a one-line change and
+    `edge.status` stays `"unresolved"` either way. Flagging rather than
+    deciding, since it's a §5 surface.
+  - **`docker build ./backend` could not be verified in this session.** Docker
+    build containers here have no outbound network (`tls handshake eof`
+    fetching wheels from PyPI); a trivial control image that curls pypi.org
+    fails the same way, so it is the environment, not the Dockerfile. What I
+    could verify: `uv sync --frozen --no-dev` — the exact command the failing
+    layer runs — succeeds locally against the committed `uv.lock`, and the only
+    dependency change this session is adding `pyyaml`. Please re-run the image
+    build on a networked machine before flipping that box.
+- Next: nothing outstanding in the backend prompt — §5's endpoints, §6–§11 and
+  §12's test list are all implemented and green. The remaining backend item on
+  `PROGRESS.md` is contract verification against real repos with a real PAT
+  (orchestrator-owned); `tests/test_contract_scenario.py` now covers the same
+  ground against mocked GitHub. If a live PAT arrives, the useful follow-up is
+  a manual run of that same scenario against three real repos to confirm the
+  GitHub response shapes the mock assumes (tree `truncated`, blob encoding,
+  `git/ref/heads/{branch}` payload) match production.

@@ -1,0 +1,12 @@
+name: Quoted On
+"on":
+  workflow_call:
+    inputs:
+      target:
+        required: true
+        type: string
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"

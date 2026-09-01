@@ -1,0 +1,12 @@
+name: Release
+on:
+  workflow_dispatch:
+
+jobs:
+  call-deploy:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: production
+      dry_run: false
+    secrets: inherit

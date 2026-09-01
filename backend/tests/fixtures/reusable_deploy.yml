@@ -1,0 +1,37 @@
+name: Reusable Deploy
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: string
+      dry_run:
+        description: Skip the actual deploy
+        required: false
+        default: false
+        type: boolean
+      replicas:
+        required: false
+        default: 2
+        type: number
+      tier:
+        required: false
+        default: standard
+        type: choice
+        options:
+          - standard
+          - premium
+    secrets:
+      DEPLOY_TOKEN:
+        required: true
+    outputs:
+      deployed_url:
+        description: URL of the deployment
+        value: ${{ jobs.deploy.outputs.url }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./deploy.sh "${{ inputs.environment }}"

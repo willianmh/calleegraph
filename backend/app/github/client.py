@@ -1,15 +1,20 @@
 """Async GitHub REST client (httpx).
 
-This slice only needs PAT validation (``GET /user``), so that's all that's
-implemented here. Rate limits are respected by honoring ``Retry-After`` and
-the ``x-ratelimit-remaining``/``x-ratelimit-reset`` headers with a bounded
-backoff — carried over from Runbook's client since repo-tree listing and
-blob/content fetch (backend prompt §6) will extend this same class.
+Covers PAT validation (``GET /user``), repo metadata, branch HEAD lookup, and
+workflow discovery via the Git Trees + Blobs APIs (backend prompt §6). Rate
+limits are respected by honoring ``Retry-After`` and the
+``x-ratelimit-remaining``/``x-ratelimit-reset`` headers with a bounded backoff.
+
+Discovery deliberately uses **one** recursive tree call per repo rather than
+walking directories with the contents API, which would cost one request per
+directory and burn through rate limits on large repos.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import logging
 import time
 from typing import Any
@@ -32,7 +37,7 @@ class GitHubClient:
 
     def __init__(
         self,
-        token: str,
+        token: str | None,
         *,
         api_base: str = "https://api.github.com",
         api_version: str = "2022-11-28",
@@ -48,11 +53,15 @@ class GitHubClient:
 
     @property
     def _headers(self) -> dict[str, str]:
-        return {
+        headers = {
             "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {self._token}",
             "X-GitHub-Api-Version": self._api_version,
         }
+        # No PAT is a supported mode: public repos are readable
+        # unauthenticated, just at a much lower rate limit.
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
 
     async def __aenter__(self) -> GitHubClient:
         return self
@@ -139,3 +148,46 @@ class GitHubClient:
         resp = await self._request("GET", "/user")
         self._raise_for(resp, "PAT validation failed")
         return resp.json()
+
+    async def get_repo(self, owner: str, repo: str) -> dict[str, Any]:
+        """``GET /repos/{owner}/{repo}`` — reachability check + default branch."""
+        resp = await self._request("GET", f"/repos/{owner}/{repo}")
+        self._raise_for(resp, f"cannot read repository {owner}/{repo}")
+        return resp.json()
+
+    async def get_branch_head_sha(self, owner: str, repo: str, branch: str) -> str:
+        """Current commit SHA at the tip of ``branch``.
+
+        Uses the git-ref endpoint rather than ``/commits/{branch}`` because the
+        payload is a few hundred bytes instead of a full commit object.
+        """
+        resp = await self._request("GET", f"/repos/{owner}/{repo}/git/ref/heads/{branch}")
+        self._raise_for(resp, f"cannot resolve {owner}/{repo}@{branch}")
+        body = resp.json()
+        sha = (body.get("object") or {}).get("sha")
+        if not isinstance(sha, str) or not sha:
+            raise GitHubError(f"malformed ref response for {owner}/{repo}@{branch}")
+        return sha
+
+    async def get_tree(self, owner: str, repo: str, sha: str) -> dict[str, Any]:
+        """``GET /git/trees/{sha}?recursive=1`` — every path in the repo, one call."""
+        resp = await self._request(
+            "GET", f"/repos/{owner}/{repo}/git/trees/{sha}", params={"recursive": "1"}
+        )
+        self._raise_for(resp, f"cannot list tree for {owner}/{repo}@{sha}")
+        return resp.json()
+
+    async def get_blob_text(self, owner: str, repo: str, blob_sha: str) -> str:
+        """``GET /git/blobs/{sha}`` → decoded UTF-8 text."""
+        resp = await self._request("GET", f"/repos/{owner}/{repo}/git/blobs/{blob_sha}")
+        self._raise_for(resp, f"cannot read blob {blob_sha} in {owner}/{repo}")
+        body = resp.json()
+        content = body.get("content") or ""
+        encoding = body.get("encoding", "base64")
+        if encoding != "base64":
+            raise GitHubError(f"unexpected blob encoding {encoding!r} for {blob_sha}")
+        try:
+            raw = base64.b64decode(content)
+        except (binascii.Error, ValueError) as exc:
+            raise GitHubError(f"undecodable blob {blob_sha} in {owner}/{repo}: {exc}") from exc
+        return raw.decode("utf-8", errors="replace")

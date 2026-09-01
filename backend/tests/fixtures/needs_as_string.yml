@@ -1,0 +1,13 @@
+name: Scalar Needs
+on: push
+jobs:
+  first:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"
+  second:
+    needs: first
+    if: needs.first.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"

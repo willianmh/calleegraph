@@ -1,0 +1,9 @@
+node_modules
+dist
+mock
+.git
+.gitignore
+Dockerfile
+.dockerignore
+WORKLOG.md
+*.log

@@ -1,0 +1,7 @@
+name: Bare Trigger
+on: workflow_call
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"

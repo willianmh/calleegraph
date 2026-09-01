@@ -1,0 +1,76 @@
+# Calleegraph — four services on one network (orchestrator prompt §7).
+#
+# Every value comes from the root `.env` (see `.env.example`). Start with:
+#   cp .env.example .env && $EDITOR .env && docker compose up --build
+# The app is then usable at http://localhost:8080.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: calleegraph
+      POSTGRES_PASSWORD: calleegraph
+      POSTGRES_DB: calleegraph
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calleegraph -d calleegraph"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      # GitHub
+      GITHUB_PAT: ${GITHUB_PAT:-}
+      GITHUB_API_VERSION: ${GITHUB_API_VERSION:-2022-11-28}
+      GITHUB_API_BASE: ${GITHUB_API_BASE:-https://api.github.com}
+      # Runtime
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required — see .env.example}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://calleegraph:calleegraph@postgres:5432/calleegraph}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      GRAPH_CACHE_TTL_SECONDS: ${GRAPH_CACHE_TTL_SECONDS:-300}
+      FETCH_CONCURRENCY: ${FETCH_CONCURRENCY:-3}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # No curl in the slim image; use the interpreter that's guaranteed present.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=3).status == 200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

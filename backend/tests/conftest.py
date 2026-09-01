@@ -33,6 +33,8 @@ from app.cache import dispose_redis, get_redis, init_redis  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.db import dispose_engine, get_engine, init_engine, session_scope  # noqa: E402
 from app.models import Settings as SettingsRow  # noqa: E402
+from app.sync import reset_semaphore  # noqa: E402
+from tests.repos import FakeGitHub  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +43,8 @@ async def _db() -> AsyncIterator[None]:
     get_settings.cache_clear()
     init_engine()
     init_redis()
+    # asyncio.Semaphore binds to the running loop, and each test gets its own.
+    reset_semaphore()
     async with get_engine().begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     yield
@@ -79,3 +83,50 @@ def make_mock_github_client(handler):  # type: ignore[no-untyped-def]
     transport = httpx.MockTransport(handler)
     http_client = httpx.AsyncClient(transport=transport)
     return GitHubClient("ghp_testtoken", client=http_client)
+
+
+@pytest.fixture
+def fake_github(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
+    """Route every GitHub call in the app through the synthetic repo set.
+
+    Both ``app.sync`` and ``app.routers.repositories`` import
+    ``make_github_client`` by name, so both bindings are replaced.
+    """
+    from app.github.client import GitHubClient
+
+    gh = FakeGitHub()
+
+    async def _make_client(_session: object) -> GitHubClient:
+        return GitHubClient(
+            "ghp_testtoken",
+            client=httpx.AsyncClient(transport=gh.transport(), base_url="https://api.github.com"),
+        )
+
+    import app.routers.repositories as repositories_module
+    import app.services as services_module
+    import app.sync as sync_module
+
+    for module in (services_module, sync_module, repositories_module):
+        monkeypatch.setattr(module, "make_github_client", _make_client)
+    return gh
+
+
+@pytest.fixture
+async def events_sink():  # type: ignore[no-untyped-def]
+    """Collect every SSE event published during a test."""
+    from app import events
+
+    captured: list[tuple[str, dict]] = []
+    original = events.publish
+
+    def _capture(event, data):  # type: ignore[no-untyped-def]
+        captured.append((event, data))
+        original(event, data)
+
+    events.publish = _capture  # type: ignore[assignment]
+    # graph.service and sync call `events.publish` through the module, so the
+    # patch above is enough; publish_repository/publish_graph are unaffected.
+    try:
+        yield captured
+    finally:
+        events.publish = original  # type: ignore[assignment]

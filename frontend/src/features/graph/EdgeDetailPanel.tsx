@@ -82,7 +82,7 @@ function GroupedList({
   return (
     <div>
       <p className="m-0 mb-[12px] text-[14px] leading-[1.5]">
-        Expand the graph or switch density away from <em>Grouped</em> to inspect a single call.
+        Selecting a specific call below ungroups the graph to show it.
       </p>
       <div className="flex flex-col gap-[3px]">
         {edges.map((edge) => {

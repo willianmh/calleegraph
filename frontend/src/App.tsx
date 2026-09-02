@@ -1,9 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { useGraph, useRepositories } from '@/api/queries';
+import type { GraphResponse } from '@/api/types';
 import { ConnectionDot } from '@/components/StatusDot';
+import { buildIndex, EMPTY_FILTERS, filterGraph, type GraphFilters } from '@/features/graph/model';
 import { subscribeToEvents, type ConnectionState } from '@/lib/sse';
 
 const NAV = [
@@ -12,6 +14,19 @@ const NAV = [
   { to: '/settings', label: 'Settings', end: false },
 ] as const;
 
+const EMPTY_GRAPH: GraphResponse = { repositories: [], nodes: [], edges: [], generated_at: '' };
+
+/**
+ * Shared with `GraphScreen` via `useOutletContext` so the masthead's stat
+ * line and the canvas filter the same graph the same way (§4.2) — filters
+ * live here, one level above the graph route, because the masthead that
+ * needs to respect them lives here too.
+ */
+export interface GraphOutletContext {
+  filters: GraphFilters;
+  setFilters: Dispatch<SetStateAction<GraphFilters>>;
+}
+
 /**
  * The app shell: the front-page masthead, the thick-thin rule pair carrying
  * the running stat line, and the one global SSE subscription (§4.1/§5).
@@ -19,6 +34,7 @@ const NAV = [
 export function App() {
   const client = useQueryClient();
   const [connection, setConnection] = useState<ConnectionState>('connecting');
+  const [filters, setFilters] = useState<GraphFilters>(EMPTY_FILTERS);
   const repositories = useRepositories();
   const graph = useGraph();
   const location = useLocation();
@@ -34,15 +50,27 @@ export function App() {
   const synced = repos.filter((repo) => repo.status === 'done').length;
   const failed = repos.filter((repo) => repo.status === 'error').length;
 
+  /**
+   * A small, deliberate duplication of the same `buildIndex`/`filterGraph`
+   * pass `GraphScreen` runs on `graph.data` — inconsequential at this app's
+   * scale, and it keeps the masthead and the canvas independently correct
+   * off the same inputs rather than coupling their render cycles.
+   */
+  const index = useMemo(() => buildIndex(graph.data ?? EMPTY_GRAPH), [graph.data]);
+  const filtered = useMemo(
+    () => filterGraph(graph.data ?? EMPTY_GRAPH, index, filters),
+    [graph.data, index, filters],
+  );
+
   const statLine = useMemo(() => {
     if (repos.length === 0) return 'No repositories tracked';
     const parts = [`${repos.length} ${repos.length === 1 ? 'repository' : 'repositories'}`];
-    const nodes = graph.data?.nodes.length ?? 0;
-    const edges = graph.data?.edges.length ?? 0;
+    const nodes = filtered.nodes.length;
+    const edges = filtered.edges.length;
     parts.push(`${nodes} ${nodes === 1 ? 'workflow' : 'workflows'}`);
     parts.push(`${edges} ${edges === 1 ? 'call edge' : 'call edges'}`);
     return parts.join(' · ');
-  }, [repos.length, graph.data]);
+  }, [repos.length, filtered]);
 
   const syncLine = [
     synced > 0 ? `${synced} synced` : null,
@@ -52,7 +80,8 @@ export function App() {
     .filter((part): part is string => part !== null)
     .join(' · ');
 
-  const issueCount = (graph.data?.edges ?? []).filter((edge) => edge.issues.length > 0).length;
+  /** Broader than the Mismatches list on purpose — "issues" includes warnings. */
+  const issueCount = filtered.edges.filter((edge) => edge.issues.length > 0).length;
 
   return (
     <div className="grid h-full grid-rows-[auto_1fr] overflow-hidden">
@@ -102,7 +131,7 @@ export function App() {
         </div>
       </header>
       <main className="min-h-0">
-        <Outlet />
+        <Outlet context={{ filters, setFilters } satisfies GraphOutletContext} />
       </main>
     </div>
   );

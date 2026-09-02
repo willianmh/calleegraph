@@ -2,8 +2,8 @@ import dagre from '@dagrejs/dagre';
 import type { Edge as FlowEdge, Node as FlowNode } from '@xyflow/react';
 
 import type { Edge, EdgeStatus, Repository, WorkflowNode } from '@/api/types';
-import type { CallWiring, Density, FilteredGraph, GraphIndex, ParsedRef } from './model';
-import { edgeTargetId, wiringFor, worstStatus } from './model';
+import type { CallWiring, FilteredGraph, GraphIndex, ParsedRef } from './model';
+import { DETAIL_PANEL_WIDTH, edgeTargetId, wiringFor, worstStatus } from './model';
 
 // ---------------------------------------------------------------------------
 // Card geometry — the focus file's measurements
@@ -50,7 +50,7 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   wiring: CallWiring[];
   status: EdgeStatus | undefined;
   expanded: boolean;
-  density: Density;
+  compact: boolean;
   calleeCount: number;
   callerCount: number;
 }
@@ -92,7 +92,9 @@ export type CgEdge = FlowEdge<CgEdgeData>;
 export interface BuildFlowInput {
   filtered: FilteredGraph;
   index: GraphIndex;
-  density: Density;
+  compact: boolean;
+  /** One card per repository, ignoring `expandOverrides` entirely. */
+  grouped: boolean;
   /** Per-node user overrides of the density default; survives live updates. */
   expandOverrides: ReadonlyMap<string, boolean>;
   repositories: readonly Repository[];
@@ -103,33 +105,33 @@ export interface BuiltFlow {
   edges: CgEdge[];
 }
 
-/** Effective expand state: the user's choice wins, otherwise density decides. */
-export function isExpanded(
-  nodeId: string,
-  density: Density,
-  overrides: ReadonlyMap<string, boolean>,
-): boolean {
-  const override = overrides.get(nodeId);
-  if (override !== undefined) return override;
-  return density === 'detailed';
+/**
+ * Effective expand state: collapsed is always the default (§3.2) — density
+ * (compact vs. detailed) only ever changes a *collapsed* card's own content,
+ * never the expand state itself. Only an explicit click, via `overrides`,
+ * ever expands a node.
+ */
+export function isExpanded(nodeId: string, overrides: ReadonlyMap<string, boolean>): boolean {
+  return overrides.get(nodeId) ?? false;
 }
 
 export function buildFlow({
   filtered,
   index,
-  density,
+  compact,
+  grouped,
   expandOverrides,
   repositories,
 }: BuildFlowInput): BuiltFlow {
-  return density === 'grouped'
+  return grouped
     ? buildGroupedFlow(filtered, repositories)
-    : buildNodeFlow(filtered, index, density, expandOverrides, repositories);
+    : buildNodeFlow(filtered, index, compact, expandOverrides, repositories);
 }
 
 function buildNodeFlow(
   filtered: FilteredGraph,
   index: GraphIndex,
-  density: Density,
+  compact: boolean,
   expandOverrides: ReadonlyMap<string, boolean>,
   repositories: readonly Repository[],
 ): BuiltFlow {
@@ -138,14 +140,14 @@ function buildNodeFlow(
 
   for (const node of filtered.nodes) {
     const wiring = wiringFor(node, index);
-    const expanded = isExpanded(node.id, density, expandOverrides);
+    const expanded = isExpanded(node.id, expandOverrides);
     const data: WorkflowNodeData = {
       variant: 'workflow',
       node,
       wiring,
       status: index.nodeStatus.get(node.id),
       expanded,
-      density,
+      compact,
       calleeCount: index.outgoing.get(node.id)?.length ?? 0,
       callerCount: index.incoming.get(node.id)?.length ?? 0,
     };
@@ -293,15 +295,30 @@ function pushStatus(map: Map<string, EdgeStatus[]>, key: string, status: EdgeSta
 /**
  * Left-to-right ranked layout: callers on the left, the reusable workflows
  * they call to the right of them. dagre reverses any cycle internally, so a
- * mutually-recursive pair still lays out rather than throwing.
+ * mutually-recursive pair still lays out rather than throwing — but a
+ * *duplicated* parallel edge (e.g. two jobs in the same workflow both
+ * calling the same target) inside a cycle is a confirmed trigger for an
+ * internal dagre crash ("Not possible to find intersection inside of the
+ * rectangle" — verified directly against @dagrejs/dagre by fuzzing; a
+ * two-node cycle with one direction duplicated is enough, no self-loop
+ * needed). dagre only needs one edge per (source, target) pair to rank and
+ * order nodes correctly, so it never sees the duplicate; `built.edges`
+ * itself is untouched and every real edge still renders. A try/catch around
+ * `dagre.layout` is the second, independent layer: dagre is a third-party
+ * library that has now demonstrably thrown on an unremarkable graph shape,
+ * so a layout failure — this one or a future one we haven't characterized —
+ * must degrade to a simple grid rather than take down the whole screen.
  */
-export function layoutFlow(built: BuiltFlow, density: Density): BuiltFlow {
+export function layoutFlow(
+  built: BuiltFlow,
+  options: { compact: boolean; grouped: boolean },
+): BuiltFlow {
   const graph = new dagre.graphlib.Graph({ multigraph: true });
   graph.setDefaultEdgeLabel(() => ({}));
   graph.setGraph({
     rankdir: 'LR',
-    ranksep: density === 'detailed' ? 150 : 120,
-    nodesep: density === 'grouped' ? 42 : 22,
+    ranksep: options.compact ? 120 : 150,
+    nodesep: options.grouped ? 42 : 22,
     edgesep: 12,
     marginx: 40,
     marginy: 40,
@@ -310,12 +327,20 @@ export function layoutFlow(built: BuiltFlow, density: Density): BuiltFlow {
   for (const node of built.nodes) {
     graph.setNode(node.id, { width: node.width ?? 0, height: node.height ?? 0 });
   }
+  const seenPairs = new Set<string>();
   for (const edge of built.edges) {
-    // Parallel edges between the same pair need distinct dagre edge names.
+    const pairKey = `${edge.source} ${edge.target}`;
+    if (seenPairs.has(pairKey)) continue;
+    seenPairs.add(pairKey);
     graph.setEdge(edge.source, edge.target, {}, edge.id);
   }
 
-  dagre.layout(graph);
+  try {
+    dagre.layout(graph);
+  } catch (error) {
+    console.error('dagre layout failed; falling back to a grid layout', error);
+    return fallbackGridLayout(built);
+  }
 
   const nodes = built.nodes.map((node) => {
     const placed = graph.node(node.id) as { x: number; y: number } | undefined;
@@ -328,4 +353,74 @@ export function layoutFlow(built: BuiltFlow, density: Density): BuiltFlow {
   });
 
   return { nodes, edges: built.edges };
+}
+
+/**
+ * A last-resort layout used only if dagre itself throws (see `layoutFlow`
+ * above). Deliberately not rank-aware — just a stable, deterministic grid
+ * in the nodes' existing order, so the canvas still renders something the
+ * user can search, filter, and click through rather than a crashed screen.
+ */
+function fallbackGridLayout(built: BuiltFlow): BuiltFlow {
+  const GAP = 16;
+  const COLUMN_GAP = 64;
+  const rowsPerColumn = Math.max(1, Math.ceil(Math.sqrt(built.nodes.length)));
+  let x = 0;
+  let y = 0;
+  let columnWidth = 0;
+  let row = 0;
+  const nodes = built.nodes.map((node) => {
+    const width = node.width ?? COLLAPSED_WIDTH;
+    const height = node.height ?? COLLAPSED_HEIGHT;
+    const positioned = { ...node, position: { x, y } };
+    columnWidth = Math.max(columnWidth, width);
+    y += height + GAP;
+    row += 1;
+    if (row >= rowsPerColumn) {
+      row = 0;
+      y = 0;
+      x += columnWidth + COLUMN_GAP;
+      columnWidth = 0;
+    }
+    return positioned;
+  });
+  return { nodes, edges: built.edges };
+}
+
+// ---------------------------------------------------------------------------
+// Pan-to-center an edge, panel-width-aware
+// ---------------------------------------------------------------------------
+
+export interface EdgeCenterInput {
+  sourceNode: Pick<CgNode, 'position' | 'height'>;
+  targetNode: Pick<CgNode, 'position' | 'width' | 'height'>;
+}
+
+export interface EdgeCenterOptions {
+  canvasWidth: number;
+  canvasHeight: number;
+  zoom: number;
+  /** Was the detail panel already open before this selection? */
+  wasAlreadyOpen: boolean;
+}
+
+/**
+ * Where selecting an edge should pan the canvas so it lands centered in the
+ * canvas area that remains once the panel is open — not the pre-panel width.
+ * Computed from already-known layout data rather than by measuring the DOM
+ * after render, which would race the panel's own grid-column resize (§4.2).
+ */
+export function computeEdgeCenterViewport(
+  { sourceNode, targetNode }: EdgeCenterInput,
+  { canvasWidth, canvasHeight, zoom, wasAlreadyOpen }: EdgeCenterOptions,
+): { x: number; y: number; zoom: number } {
+  const effectiveWidth = wasAlreadyOpen ? canvasWidth : canvasWidth - DETAIL_PANEL_WIDTH;
+  const cx = (sourceNode.position.x + targetNode.position.x + (targetNode.width ?? 0)) / 2;
+  const cy =
+    (sourceNode.position.y +
+      (sourceNode.height ?? 0) / 2 +
+      targetNode.position.y +
+      (targetNode.height ?? 0) / 2) /
+    2;
+  return { x: effectiveWidth / 2 - cx * zoom, y: canvasHeight / 2 - cy * zoom, zoom };
 }
